@@ -9,10 +9,15 @@ veg_types <- unique(veg_polygons$Type)
 
 set.seed(1)
 
-# Function to randomly sample points among polygons of a given type 
+# Function to randomly sample points among polygons of a given vegetation type 
+#   Veg_Type - string for vegetation type (e.g. Woodland, Riverwash, etc.)
+#   Veg_Edge_Buffer - min distance (m) a point can be from the boundary of a vegetation type
+#   Inter_Unit_Distance - minimum distance between two recorders 
+#   Min_Arundo - minimum Arundo percentage in polygons used 
+#   Max_Arundo - maximum Arundo percentage in polygons used
 generatePointsByType <- function(veg_type, veg_edge_buffer, inter_unit_distance, min_arundo, max_arundo) 
 {
-  # Get stats on polygons in a certain veg type
+  # Print summary stats on polygons in a certain veg type
   print("")
   polygon_subset <- veg_polygons %>% filter(Type == veg_type,
                                             ArundoPerc > min_arundo,
@@ -47,12 +52,13 @@ generatePointsByType <- function(veg_type, veg_edge_buffer, inter_unit_distance,
 }
 
 
-# Generate random points in each veg type, stratified at least *inter_unit_distance* m apart, and each at least *veg_edge_buffer* m from a veg-type boundary
-generateAllPointsForParameterSet <- function(veg_edge_buffer, inter_unit_distance)
+# Apply above function across all vegetation types
+# Returns a sf dataframe with all possible points randomly sampled in each veg type, given constraints
+generateAllPointsForParameterSet <- function(veg_edge_buffer, inter_unit_distance, arundo_threshold)
 {
   # Get all points for each veg type
-  woodland_high_arundo <- generatePointsByType("Woodland", veg_edge_buffer, inter_unit_distance, 30, 100)
-  woodland_low_arundo <- generatePointsByType("Woodland", veg_edge_buffer, inter_unit_distance, 0, 30)
+  woodland_high_arundo <- generatePointsByType("Woodland", veg_edge_buffer, inter_unit_distance, arundo_threshold, 100)
+  woodland_low_arundo <- generatePointsByType("Woodland", veg_edge_buffer, inter_unit_distance, 0, arundo_threshold)
   riparian_scrub <- generatePointsByType("Riparian scrub", veg_edge_buffer, inter_unit_distance, 0, 100)
   typha_wetland <- generatePointsByType("Typha wetland", 20, inter_unit_distance, 0, 100)
   sage_scrub <- generatePointsByType("Sage scrub", veg_edge_buffer, inter_unit_distance, 0, 100)
@@ -60,6 +66,7 @@ generateAllPointsForParameterSet <- function(veg_edge_buffer, inter_unit_distanc
   grasses_and_forbs <- generatePointsByType("Grasses and forbes", veg_edge_buffer, inter_unit_distance, 0, 100)
   non_native <- generatePointsByType("Non-native", veg_edge_buffer, inter_unit_distance, 0, 100)
   
+  # Combine point datasets, convert to sf dataframe
   all_points <- st_sf(c(woodland_high_arundo,
                         woodland_low_arundo,
                         riparian_scrub,
@@ -68,37 +75,63 @@ generateAllPointsForParameterSet <- function(veg_edge_buffer, inter_unit_distanc
                         river_wash,
                         grasses_and_forbs,
                         non_native))
+  all_points_data <- st_join(all_points, veg_polygons)
   
-  return(st_join(all_points, veg_polygons))
+  # Add index within veg type
+  #   later, if only N points are desired from each type, subset to:   index %in% (1:N)
+  all_points_data$index <- c(1:length(woodland_high_arundo),
+                             1:length(woodland_low_arundo),
+                             1:length(riparian_scrub),
+                             1:length(typha_wetland),
+                             1:length(sage_scrub),
+                             1:length(river_wash),
+                             1:length(grasses_and_forbs),
+                             1:length(non_native))
+  # Add 'class_final' which includes both high- and low-arundo woodland
+  all_points_data$class_final <- as.character(all_points_data$Type)
+  all_points_data[all_points_data$Type == "Woodland",]$class_final <- paste(all_points_data[all_points_data$Type == "Woodland",]$class_final,
+                                                                            c(" High"," Low")[(all_points_data[all_points_data$Type == "Woodland",]$ArundoPerc > 30)+1],
+                                                                            sep="")
+  return(all_points_data)
 }
+
 
 # Print some summary data about a set of points 
 printPointSummary <- function(points, name)
 {
   print(as.data.frame(points %>% 
-          group_by(Type) %>%
-          summarize(count = n(),
-                    min_arundo = min(ArundoPerc),
-                    max_arundo = max(ArundoPerc),
-                    mean_arundo = mean(ArundoPerc),
-                    frac_with_surf_water = sum(SurfaceWat=="Y")/n())))
-  st_write(points, here::here("point_examples",paste(name,".shp",sep="")))
+                        group_by(class_final) %>%
+                        summarize(count = n(),
+                                  min_arundo = min(ArundoPerc),
+                                  max_arundo = max(ArundoPerc),
+                                  mean_arundo = mean(ArundoPerc),
+                                  frac_with_surf_water = sum(SurfaceWat=="Y")/n())))
+  st_write(points, here::here("point_examples",paste(name,".shp",sep="")), delete_dsn=TRUE)
 }
 
 # First, ensure each point is embedded within 50 m of contiguous habitat, and at least 50 m from each other point
-example_1 <- generateAllPointsForParameterSet(50, 50)
-printPointSummary(example_1)
+example_1 <- generateAllPointsForParameterSet(50, 50, 30)
+printPointSummary(example_1, "example_1")
 # next, ensure each point is embedded within 50 m of contiguous habitat, and at least 100 m from each other point
-example_2 <- generateAllPointsForParameterSet(50, 100)
-printPointSummary(example_2)
+example_2 <- generateAllPointsForParameterSet(50, 100, 30)
+printPointSummary(example_2, "example_2")
+# next, ensure each point is embedded within 50 m of contiguous habitat, and at least 150 m from each other point
+example_3 <- generateAllPointsForParameterSet(50, 150, 30)
+printPointSummary(example_3, "example_3")
+# First, ensure each point is embedded within 50 m of contiguous habitat, and at least 50 m from each other point
+example_1 <- generateAllPointsForParameterSet(25, 50, 30)
+printPointSummary(example_1, "example_4")
 # next, ensure each point is embedded within 50 m of contiguous habitat, and at least 100 m from each other point
-example_3 <- generateAllPointsForParameterSet(50, 150)
-printPointSummary(example_3)
+example_2 <- generateAllPointsForParameterSet(25, 100, 30)
+printPointSummary(example_2, "example_5")
+# next, ensure each point is embedded within 50 m of contiguous habitat, and at least 150 m from each other point
+example_3 <- generateAllPointsForParameterSet(25, 150, 30)
+printPointSummary(example_3, "example_6")
 # next, ensure each point is embedded within 50 m of contiguous habitat, and at least 100 m from each other point
-example_4 <- generateAllPointsForParameterSet(100, 100)
-printPointSummary(example_4)
-# next, ensure each point is embedded within 50 m of contiguous habitat, and at least 100 m from each other point
-example_5 <- generateAllPointsForParameterSet(150, 150)
-printPointSummary(example_5)
+# example_4 <- generateAllPointsForParameterSet(100, 100, 30)
+# printPointSummary(example_4, "example_4")
+# # next, ensure each point is embedded within 50 m of contiguous habitat, and at least 100 m from each other point
+# example_5 <- generateAllPointsForParameterSet(150, 150, 30)
+# printPointSummary(example_5, "example_5")
 
 
